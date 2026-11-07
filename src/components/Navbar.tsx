@@ -8,6 +8,7 @@ import {
   User,
   ShieldCheck,
   Sparkles,
+  AlertTriangle,
 } from 'lucide-react';
 import { useResources } from '@/context/ResourcesContext';
 import { useAuth } from '@/context/AuthContext';
@@ -19,7 +20,7 @@ interface Props {
 }
 
 export function Navbar({ onOpenQuickAdd, onOpenAuth, onOpenSetup }: Props) {
-  const { viewMode, setViewMode } = useResources();
+  const { viewMode, setViewMode, syncStatus } = useResources();
   const { user, demoUser, isConfigured } = useAuth();
 
   return (
@@ -77,21 +78,36 @@ export function Navbar({ onOpenQuickAdd, onOpenAuth, onOpenSetup }: Props) {
           {/* Database / Sync Status Pill */}
           <button
             onClick={onOpenSetup}
-            className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition ${
-              isConfigured
+            title={
+              !isConfigured
+                ? 'Running in local storage sandbox'
+                : syncStatus === 'synced'
+                ? 'Supabase live database sync active'
+                : 'Saved locally in browser. Click to view 1-click Supabase cloud sync fix.'
+            }
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition ${
+              !isConfigured
+                ? 'bg-amber-950/40 text-amber-300 border-amber-500/30 hover:bg-amber-900/40'
+                : syncStatus === 'synced'
                 ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30 hover:bg-emerald-900/40'
-                : 'bg-amber-950/40 text-amber-300 border-amber-500/30 hover:bg-amber-900/40'
+                : 'bg-amber-950/60 text-amber-300 border-amber-500/50 hover:bg-amber-900/50'
             }`}
           >
-            {isConfigured ? (
+            {!isConfigured ? (
+              <>
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Demo Mode</span>
+              </>
+            ) : syncStatus === 'synced' ? (
               <>
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Supabase Live</span>
+                <span className="hidden sm:inline">Supabase Live</span>
               </>
             ) : (
               <>
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Demo Mode</span>
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                <span className="hidden sm:inline">Saved Locally (Fix Sync)</span>
+                <span className="sm:hidden">Local</span>
               </>
             )}
           </button>

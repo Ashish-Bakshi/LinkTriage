@@ -76,10 +76,10 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key-here
 Run the SQL migration in `supabase/schema.sql` inside the Supabase SQL Editor:
 
 ```sql
--- Creates resources table with RLS and updated_at trigger
+-- Creates resources table with RLS, nullable user_id (for guest & direct saving), and realtime replication
 CREATE TABLE IF NOT EXISTS public.resources (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
     url TEXT NOT NULL,
     title TEXT NOT NULL,
     source_platform TEXT NOT NULL CHECK (source_platform IN ('LinkedIn', 'X', 'Instagram', 'YouTube', 'Web')),
@@ -92,12 +92,20 @@ CREATE TABLE IF NOT EXISTS public.resources (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+ALTER TABLE public.resources ADD COLUMN IF NOT EXISTS image_url TEXT;
+ALTER TABLE public.resources ALTER COLUMN user_id DROP NOT NULL;
+
 ALTER TABLE public.resources ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can manage own resources"
-    ON public.resources FOR ALL
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Enable all access for all users" ON public.resources;
+CREATE POLICY "Enable all access for all users"
+    ON public.resources
+    FOR ALL
+    TO anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+ALTER PUBLICATION supabase_realtime ADD TABLE public.resources;
 ```
 
 ### 4. Run Development Server

@@ -1,15 +1,20 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, ReactNode, useCallback } from 'react';
 import { Resource, Status, ViewMode, FilterOptions } from '@/types';
 import { INITIAL_MOCK_RESOURCES, DEFAULT_CATEGORIES } from '@/lib/supabase/mock-data';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from './AuthContext';
 
+export type SyncStatus = 'synced' | 'local_only' | 'syncing' | 'error';
+
 interface ResourcesContextType {
   resources: Resource[];
   filteredResources: Resource[];
   isLoading: boolean;
+  isHydrated: boolean;
+  syncStatus: SyncStatus;
+  syncError: string | null;
   viewMode: ViewMode;
   setViewMode: (mode: ViewMode) => void;
   filters: FilterOptions;
@@ -22,6 +27,7 @@ interface ResourcesContextType {
   updateStatus: (id: string, newStatus: Status) => Promise<void>;
   deleteResource: (id: string) => Promise<void>;
   refreshResources: () => Promise<void>;
+  syncLocalToSupabase: () => Promise<{ success: boolean; count: number; error?: string }>;
 }
 
 const ResourcesContext = createContext<ResourcesContextType | undefined>(undefined);
@@ -29,46 +35,15 @@ const ResourcesContext = createContext<ResourcesContextType | undefined>(undefin
 const LOCAL_STORAGE_KEY = 'linktriage_saved_resources';
 const CATEGORIES_KEY = 'linktriage_categories';
 
-function getInitialCategories(): string[] {
-  if (typeof window !== 'undefined') {
-    try {
-      const savedCats = localStorage.getItem(CATEGORIES_KEY);
-      if (savedCats) {
-        const parsed = JSON.parse(savedCats);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return Array.from(new Set([...DEFAULT_CATEGORIES, ...parsed]));
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return DEFAULT_CATEGORIES;
-}
-
-function getInitialResources(): Resource[] {
-  if (typeof window !== 'undefined') {
-    try {
-      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return INITIAL_MOCK_RESOURCES;
-}
-
 export function ResourcesProvider({ children }: { children: ReactNode }) {
   const { user, isConfigured } = useAuth();
-  const [resources, setResources] = useState<Resource[]>(getInitialResources);
+  const [resources, setResources] = useState<Resource[]>(INITIAL_MOCK_RESOURCES);
+  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [isHydrated, setIsHydrated] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('synced');
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('kanban');
-  const [categories, setCategories] = useState<string[]>(getInitialCategories);
 
   const [filters, setFilters] = useState<FilterOptions>({
     search: '',
@@ -77,52 +52,142 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
     priority: 'All',
   });
 
-  const fetchResources = async () => {
-    if (isConfigured && user) {
-      setIsLoading(true);
-      const supabase = createClient();
-      if (supabase) {
-        try {
-          const { data, error } = await supabase
-            .from('resources')
-            .select('*')
-            .order('created_at', { ascending: false });
-
-          if (!error && data) {
-            setResources(data as Resource[]);
-          }
-        } catch (err) {
-          console.error('Supabase query error, falling back to local cache:', err);
-        }
+  // Safe helper to write to localStorage
+  const persistLocally = useCallback((newList: Resource[]) => {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newList));
+      } catch (err) {
+        console.warn('Failed to save to localStorage:', err);
       }
+    }
+  }, []);
+
+  // 1. Initial client-side hydration from localStorage (fixes "one refresh and everything gone")
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    Promise.resolve().then(() => {
+      try {
+        const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setResources(parsed);
+          }
+        } else {
+          // First visit: seed localStorage with default mock items
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(INITIAL_MOCK_RESOURCES));
+        }
+      } catch (err) {
+        console.warn('Error reading local resources:', err);
+      }
+
+      try {
+        const savedCats = localStorage.getItem(CATEGORIES_KEY);
+        if (savedCats) {
+          const parsedCats = JSON.parse(savedCats);
+          if (Array.isArray(parsedCats) && parsedCats.length > 0) {
+            setCategories(Array.from(new Set([...DEFAULT_CATEGORIES, ...parsedCats])));
+          }
+        }
+      } catch (err) {
+        console.warn('Error reading local categories:', err);
+      }
+
+      setIsHydrated(true);
+    });
+  }, []);
+
+  // 2. Fetch resources from Supabase
+  const fetchResources = useCallback(async () => {
+    if (!isConfigured) {
+      setSyncStatus('local_only');
+      return;
+    }
+
+    const supabase = createClient();
+    if (!supabase) return;
+
+    try {
+      setIsLoading(true);
+      let query = supabase
+        .from('resources')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (user?.id) {
+        // Query user's resources or unassigned resources
+        query = query.or(`user_id.eq.${user.id},user_id.is.null`);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.warn('Supabase fetch failed, preserving local storage data:', error.message);
+        setSyncStatus('local_only');
+        setSyncError(error.message);
+      } else if (data && data.length > 0) {
+        const remoteList = data as Resource[];
+        setResources(remoteList);
+        persistLocally(remoteList);
+        setSyncStatus('synced');
+        setSyncError(null);
+      } else if (data && data.length === 0) {
+        // Remote table is empty. Keep local items so user doesn't lose anything
+        setSyncStatus('synced');
+        setSyncError(null);
+      }
+    } catch (err: unknown) {
+      console.error('Supabase query exception, using local cache:', err);
+      setSyncStatus('local_only');
+      setSyncError(err instanceof Error ? err.message : 'Connection error');
+    } finally {
       setIsLoading(false);
     }
-  };
+  }, [isConfigured, user, persistLocally]);
 
+  // Load from Supabase once client hydration is done and whenever auth changes
   useEffect(() => {
     let isSubscribed = true;
-    if (isConfigured && user) {
+    if (isConfigured) {
       const supabase = createClient();
       if (supabase) {
-        supabase
+        let query = supabase
           .from('resources')
           .select('*')
-          .order('created_at', { ascending: false })
-          .then(({ data, error }) => {
-            if (isSubscribed && !error && data) {
-              setResources(data as Resource[]);
-            }
-          });
+          .order('created_at', { ascending: false });
+
+        if (user?.id) {
+          query = query.or(`user_id.eq.${user.id},user_id.is.null`);
+        }
+
+        query.then(({ data, error }) => {
+          if (!isSubscribed) return;
+          if (error) {
+            setSyncStatus('local_only');
+            setSyncError(error.message);
+          } else if (data && data.length > 0) {
+            const remoteList = data as Resource[];
+            setResources(remoteList);
+            persistLocally(remoteList);
+            setSyncStatus('synced');
+            setSyncError(null);
+          } else {
+            setSyncStatus('synced');
+            setSyncError(null);
+          }
+        });
       }
     }
     return () => {
       isSubscribed = false;
     };
-  }, [isConfigured, user]);
+  }, [isConfigured, user, persistLocally]);
 
   // Real-time synchronization with Supabase
   useEffect(() => {
-    if (!isConfigured || !user) return;
+    if (!isConfigured) return;
 
     const supabase = createClient();
     if (!supabase) return;
@@ -137,16 +202,24 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
             const newRes = payload.new as Resource;
             setResources((prev) => {
               if (prev.some((r) => r.id === newRes.id)) return prev;
-              return [newRes, ...prev];
+              const next = [newRes, ...prev];
+              persistLocally(next);
+              return next;
             });
           } else if (payload.eventType === 'UPDATE') {
             const updated = payload.new as Resource;
-            setResources((prev) =>
-              prev.map((r) => (r.id === updated.id ? updated : r))
-            );
+            setResources((prev) => {
+              const next = prev.map((r) => (r.id === updated.id ? updated : r));
+              persistLocally(next);
+              return next;
+            });
           } else if (payload.eventType === 'DELETE') {
             const oldRes = payload.old as { id: string };
-            setResources((prev) => prev.filter((r) => r.id !== oldRes.id));
+            setResources((prev) => {
+              const next = prev.filter((r) => r.id !== oldRes.id);
+              persistLocally(next);
+              return next;
+            });
           }
         }
       )
@@ -155,18 +228,7 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [isConfigured, user]);
-
-  // Persist to localStorage whenever resources change in demo/local mode
-  const persistLocally = (newList: Resource[]) => {
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newList));
-      } catch {
-        // ignore
-      }
-    }
-  };
+  }, [isConfigured, persistLocally]);
 
   const addCategory = (category: string) => {
     const trimmed = category.trim();
@@ -192,43 +254,73 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
       updated_at: now,
     };
 
-    // Optimistic UI update
+    // 1. Optimistic UI update and immediate localStorage persistence
     setResources((prev) => {
       const next = [newResource, ...prev];
       persistLocally(next);
       return next;
     });
 
-    if (isConfigured && user) {
+    // 2. Persist to Supabase if configured
+    if (isConfigured) {
       const supabase = createClient();
       if (supabase) {
         try {
-          const { data: inserted, error } = await supabase
+          const insertPayload: Record<string, unknown> = {
+            url: data.url,
+            title: data.title,
+            source_platform: data.source_platform,
+            category: data.category,
+            priority: data.priority,
+            status: data.status,
+            description: data.description || null,
+          };
+
+          if (user?.id) {
+            insertPayload.user_id = user.id;
+          }
+
+          if (data.image_url) {
+            insertPayload.image_url = data.image_url;
+          }
+
+          let { data: inserted, error } = await supabase
             .from('resources')
-            .insert({
-              url: data.url,
-              title: data.title,
-              source_platform: data.source_platform,
-              category: data.category,
-              priority: data.priority,
-              status: data.status,
-              description: data.description || null,
-              image_url: data.image_url || null,
-              user_id: user.id,
-            })
+            .insert(insertPayload)
             .select()
             .single();
 
+          // Graceful fallback: If image_url column doesn't exist in Supabase (PGRST204 or 42703), retry without it
+          if (error && (error.code === 'PGRST204' || error.code === '42703' || error.message?.includes('image_url')) && insertPayload.image_url) {
+            delete insertPayload.image_url;
+            const retry = await supabase
+              .from('resources')
+              .insert(insertPayload)
+              .select()
+              .single();
+            inserted = retry.data;
+            error = retry.error;
+          }
+
           if (!error && inserted) {
+            const dbResource = inserted as Resource;
             setResources((prev) => {
-              const updated = prev.map((r) => (r.id === tempId ? (inserted as Resource) : r));
+              const updated = prev.map((r) => (r.id === tempId ? dbResource : r));
               persistLocally(updated);
               return updated;
             });
-            return inserted as Resource;
+            setSyncStatus('synced');
+            setSyncError(null);
+            return dbResource;
+          } else if (error) {
+            console.warn('Supabase insert failed (saved locally):', error.message);
+            setSyncStatus('local_only');
+            setSyncError(error.message);
           }
-        } catch (err) {
-          console.error('Failed to insert resource in Supabase:', err);
+        } catch (err: unknown) {
+          console.error('Failed to insert resource in Supabase (saved locally):', err);
+          setSyncStatus('local_only');
+          setSyncError(err instanceof Error ? err.message : 'Database error');
         }
       }
     }
@@ -244,17 +336,25 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    if (isConfigured && user) {
+    if (isConfigured) {
       const supabase = createClient();
       if (supabase) {
         try {
-          await supabase
+          const updatePayload: Record<string, unknown> = {
+            ...updates,
+            updated_at: now,
+          };
+          delete updatePayload.id;
+
+          const { error } = await supabase
             .from('resources')
-            .update({
-              ...updates,
-              updated_at: now,
-            })
+            .update(updatePayload)
             .eq('id', id);
+
+          if (error && (error.code === 'PGRST204' || error.code === '42703' || error.message?.includes('image_url')) && updatePayload.image_url) {
+            delete updatePayload.image_url;
+            await supabase.from('resources').update(updatePayload).eq('id', id);
+          }
         } catch (err) {
           console.error('Failed to update resource in Supabase:', err);
         }
@@ -273,7 +373,7 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    if (isConfigured && user) {
+    if (isConfigured) {
       const supabase = createClient();
       if (supabase) {
         try {
@@ -282,6 +382,64 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
           console.error('Failed to delete resource in Supabase:', err);
         }
       }
+    }
+  };
+
+  const syncLocalToSupabase = async () => {
+    if (!isConfigured) {
+      return { success: false, count: 0, error: 'Supabase URL and Anon Key not configured in .env.local' };
+    }
+    const supabase = createClient();
+    if (!supabase) {
+      return { success: false, count: 0, error: 'Supabase client unavailable' };
+    }
+
+    try {
+      setIsLoading(true);
+      let insertedCount = 0;
+      for (const res of resources) {
+        const payload: Record<string, unknown> = {
+          url: res.url,
+          title: res.title,
+          source_platform: res.source_platform,
+          category: res.category,
+          priority: res.priority,
+          status: res.status,
+          description: res.description || null,
+        };
+        if (user?.id) {
+          payload.user_id = user.id;
+        }
+        if (res.image_url) {
+          payload.image_url = res.image_url;
+        }
+
+        let { data, error } = await supabase.from('resources').insert(payload).select().single();
+        if (error && (error.code === 'PGRST204' || error.code === '42703' || error.message?.includes('image_url')) && payload.image_url) {
+          delete payload.image_url;
+          const retry = await supabase.from('resources').insert(payload).select().single();
+          data = retry.data;
+          error = retry.error;
+        }
+
+        if (error) {
+          setSyncStatus('local_only');
+          setSyncError(error.message);
+          setIsLoading(false);
+          return { success: false, count: insertedCount, error: error.message };
+        } else if (data) {
+          insertedCount++;
+        }
+      }
+
+      await fetchResources();
+      setSyncStatus('synced');
+      setSyncError(null);
+      setIsLoading(false);
+      return { success: true, count: insertedCount };
+    } catch (err: unknown) {
+      setIsLoading(false);
+      return { success: false, count: 0, error: err instanceof Error ? err.message : 'Sync failed' };
     }
   };
 
@@ -324,6 +482,9 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
         resources,
         filteredResources,
         isLoading,
+        isHydrated,
+        syncStatus,
+        syncError,
         viewMode,
         setViewMode,
         filters,
@@ -336,6 +497,7 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
         updateStatus,
         deleteResource,
         refreshResources: fetchResources,
+        syncLocalToSupabase,
       }}
     >
       {children}

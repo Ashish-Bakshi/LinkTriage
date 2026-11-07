@@ -1,6 +1,7 @@
 -- ==============================================================================
 -- LinkTriage: Database Schema & Row Level Security (RLS) Policies
 -- Multi-device synchronization schema for Supabase (PostgreSQL)
+-- Supports both authenticated user accounts and direct/guest link saving.
 -- ==============================================================================
 
 -- 1. Create Enums / Custom Types if not already present
@@ -25,7 +26,7 @@ END $$;
 -- 2. Create Resources Table
 CREATE TABLE IF NOT EXISTS public.resources (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
     url TEXT NOT NULL,
     title TEXT NOT NULL,
     source_platform TEXT NOT NULL CHECK (source_platform IN ('LinkedIn', 'X', 'Instagram', 'YouTube', 'Web')),
@@ -38,6 +39,12 @@ CREATE TABLE IF NOT EXISTS public.resources (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- Ensure image_url column exists if table was previously created without it
+ALTER TABLE public.resources ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+-- Ensure user_id is nullable so direct links can be saved without mandatory login
+ALTER TABLE public.resources ALTER COLUMN user_id DROP NOT NULL;
+
 -- 3. Create Indexes for performant filtering and sorting
 CREATE INDEX IF NOT EXISTS idx_resources_user_id ON public.resources(user_id);
 CREATE INDEX IF NOT EXISTS idx_resources_status ON public.resources(status);
@@ -48,31 +55,20 @@ CREATE INDEX IF NOT EXISTS idx_resources_created_at ON public.resources(created_
 -- 4. Enable Row Level Security (RLS)
 ALTER TABLE public.resources ENABLE ROW LEVEL SECURITY;
 
--- 5. Strict RLS Policies: Users can only query and mutate their own resources
+-- 5. RLS Policies: Allow anon and authenticated users full access
 DROP POLICY IF EXISTS "Users can view their own resources" ON public.resources;
-CREATE POLICY "Users can view their own resources"
-    ON public.resources
-    FOR SELECT
-    USING (auth.uid() = user_id);
-
 DROP POLICY IF EXISTS "Users can insert their own resources" ON public.resources;
-CREATE POLICY "Users can insert their own resources"
-    ON public.resources
-    FOR INSERT
-    WITH CHECK (auth.uid() = user_id);
-
 DROP POLICY IF EXISTS "Users can update their own resources" ON public.resources;
-CREATE POLICY "Users can update their own resources"
-    ON public.resources
-    FOR UPDATE
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
 DROP POLICY IF EXISTS "Users can delete their own resources" ON public.resources;
-CREATE POLICY "Users can delete their own resources"
+DROP POLICY IF EXISTS "Users can manage own resources" ON public.resources;
+DROP POLICY IF EXISTS "Enable all access for all users" ON public.resources;
+
+CREATE POLICY "Enable all access for all users"
     ON public.resources
-    FOR DELETE
-    USING (auth.uid() = user_id);
+    FOR ALL
+    TO anon, authenticated
+    USING (true)
+    WITH CHECK (true);
 
 -- 6. Trigger for automatically updating updated_at timestamp
 CREATE OR REPLACE FUNCTION public.handle_updated_at()

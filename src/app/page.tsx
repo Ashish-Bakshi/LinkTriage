@@ -10,6 +10,7 @@ import { EditResourceModal } from '@/components/EditResourceModal';
 import { AuthModal } from '@/components/AuthModal';
 import { SupabaseSetupModal } from '@/components/SupabaseSetupModal';
 import { useResources } from '@/context/ResourcesContext';
+import { useAuth } from '@/context/AuthContext';
 import { Resource } from '@/types';
 import {
   Inbox,
@@ -20,7 +21,8 @@ import {
 } from 'lucide-react';
 
 export default function HomePage() {
-  const { resources, viewMode } = useResources();
+  const { resources, viewMode, syncStatus } = useResources();
+  const { isConfigured } = useAuth();
 
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -98,7 +100,7 @@ export default function HomePage() {
             </div>
 
             <div className="p-3 bg-slate-900/60 border border-slate-800/80 rounded-xl flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
+              <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
                 <AlertCircle className="w-4 h-4" />
               </div>
               <div>
@@ -113,7 +115,7 @@ export default function HomePage() {
               </div>
               <div>
                 <div className="text-lg font-bold text-white">{completedCount}</div>
-                <div className="text-[11px] text-slate-400 font-medium">Completed</div>
+                <div className="text-[11px] text-slate-400 font-medium">Triaged / Done</div>
               </div>
             </div>
 
@@ -128,6 +130,24 @@ export default function HomePage() {
             </div>
           </div>
         </div>
+
+        {/* Cloud Sync Warning Banner if Supabase needs RLS update */}
+        {isConfigured && syncStatus === 'local_only' && (
+          <div className="mb-4 p-3 bg-amber-950/40 border border-amber-500/30 rounded-xl flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2.5 text-amber-300">
+              <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+              <span>
+                <strong>Cloud Sync Notice:</strong> Links are safely preserved locally and won&apos;t disappear on refresh. Run the 1-click SQL in your Supabase project to enable direct cloud database saving.
+              </span>
+            </div>
+            <button
+              onClick={() => setIsSetupOpen(true)}
+              className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-lg text-xs font-semibold shrink-0 transition"
+            >
+              Fix Supabase Sync
+            </button>
+          </div>
+        )}
 
         {/* Filters Strip */}
         <FilterBar />

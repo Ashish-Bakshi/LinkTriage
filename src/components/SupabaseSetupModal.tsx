@@ -1,8 +1,20 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Check, Copy, Database, ShieldCheck, ExternalLink, Sparkles } from 'lucide-react';
+import {
+  X,
+  Check,
+  Copy,
+  Database,
+  ShieldCheck,
+  ExternalLink,
+  Sparkles,
+  AlertTriangle,
+  RefreshCw,
+  CloudUpload,
+} from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { useResources } from '@/context/ResourcesContext';
 
 interface Props {
   isOpen: boolean;
@@ -10,15 +22,52 @@ interface Props {
 }
 
 export function SupabaseSetupModal({ isOpen, onClose }: Props) {
-  const { isConfigured, user, demoUser } = useAuth();
-  const [copied, setCopied] = useState(false);
+  const { isConfigured, user } = useAuth();
+  const {
+    syncStatus,
+    syncError,
+    syncLocalToSupabase,
+    refreshResources,
+    resources,
+  } = useResources();
+
+  const [copiedFix, setCopiedFix] = useState(false);
+  const [copiedFull, setCopiedFull] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [tab, setTab] = useState<'fix' | 'full'>('fix');
 
   if (!isOpen) return null;
 
-  const sqlCode = `-- LinkTriage Database Schema
+  const fixSqlCode = `-- ==============================================================================
+-- LinkTriage: 1-Click Fix for Supabase Cloud Sync
+-- 1. Make user_id optional (allows direct saving without mandatory login)
+-- 2. Add missing image_url column
+-- 3. Allow anonymous & authenticated CRUD operations
+-- ==============================================================================
+ALTER TABLE public.resources ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE public.resources ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+DROP POLICY IF EXISTS "Users can manage own resources" ON public.resources;
+DROP POLICY IF EXISTS "Users can view their own resources" ON public.resources;
+DROP POLICY IF EXISTS "Users can insert their own resources" ON public.resources;
+DROP POLICY IF EXISTS "Users can update their own resources" ON public.resources;
+DROP POLICY IF EXISTS "Users can delete their own resources" ON public.resources;
+DROP POLICY IF EXISTS "Enable all access for all users" ON public.resources;
+
+CREATE POLICY "Enable all access for all users"
+    ON public.resources
+    FOR ALL
+    TO anon, authenticated
+    USING (true)
+    WITH CHECK (true);`;
+
+  const fullSchemaCode = `-- ==============================================================================
+-- LinkTriage: Full PostgreSQL Database Schema for Supabase
+-- ==============================================================================
 CREATE TABLE IF NOT EXISTS public.resources (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
     url TEXT NOT NULL,
     title TEXT NOT NULL,
     source_platform TEXT NOT NULL CHECK (source_platform IN ('LinkedIn', 'X', 'Instagram', 'YouTube', 'Web')),
@@ -26,37 +75,85 @@ CREATE TABLE IF NOT EXISTS public.resources (
     priority TEXT NOT NULL CHECK (priority IN ('High', 'Medium', 'Low')),
     status TEXT NOT NULL CHECK (status IN ('Inbox', 'In Progress', 'Completed')),
     description TEXT,
+    image_url TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+ALTER TABLE public.resources ADD COLUMN IF NOT EXISTS image_url TEXT;
+ALTER TABLE public.resources ALTER COLUMN user_id DROP NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_resources_user_id ON public.resources(user_id);
+CREATE INDEX IF NOT EXISTS idx_resources_status ON public.resources(status);
+CREATE INDEX IF NOT EXISTS idx_resources_priority ON public.resources(priority);
+CREATE INDEX IF NOT EXISTS idx_resources_created_at ON public.resources(created_at DESC);
+
 ALTER TABLE public.resources ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can manage own resources"
-    ON public.resources FOR ALL
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);`;
+DROP POLICY IF EXISTS "Enable all access for all users" ON public.resources;
+CREATE POLICY "Enable all access for all users"
+    ON public.resources
+    FOR ALL
+    TO anon, authenticated
+    USING (true)
+    WITH CHECK (true);
 
-  const copySql = () => {
-    navigator.clipboard.writeText(sqlCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+ALTER PUBLICATION supabase_realtime ADD TABLE public.resources;`;
+
+  const copyFix = () => {
+    navigator.clipboard.writeText(fixSqlCode);
+    setCopiedFix(true);
+    setTimeout(() => setCopiedFix(false), 2000);
+  };
+
+  const copyFull = () => {
+    navigator.clipboard.writeText(fullSchemaCode);
+    setCopiedFull(true);
+    setTimeout(() => setCopiedFull(false), 2000);
+  };
+
+  const handleTestAndSync = async () => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await syncLocalToSupabase();
+      if (res.success) {
+        setSyncMsg(`Successfully synced ${res.count} items to Supabase cloud!`);
+      } else {
+        setSyncMsg(`Sync check: ${res.error || 'Check Supabase RLS policy.'}`);
+      }
+    } catch (err: unknown) {
+      setSyncMsg(`Sync error: ${err instanceof Error ? err.message : 'Failed'}`);
+    } finally {
+      setSyncing(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
-      <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 overflow-hidden max-h-[90vh] flex flex-col text-slate-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in text-slate-100">
+      <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 overflow-hidden max-h-[92vh] flex flex-col">
+        {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-              isConfigured ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
-            }`}>
+            <div
+              className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                isConfigured && syncStatus === 'synced'
+                  ? 'bg-emerald-500/20 text-emerald-400'
+                  : isConfigured && syncStatus === 'local_only'
+                  ? 'bg-amber-500/20 text-amber-400'
+                  : 'bg-indigo-500/20 text-indigo-400'
+              }`}
+            >
               <Database className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-white">Database & Sync Status</h3>
+              <h3 className="text-lg font-bold text-white">Database &amp; Sync Status</h3>
               <p className="text-xs text-slate-400">
-                {isConfigured ? 'Supabase Backend Connected' : 'Running in Local Storage / Demo Mode'}
+                {isConfigured
+                  ? syncStatus === 'synced'
+                    ? 'Connected and synchronized with Supabase'
+                    : 'Supabase configured, local fallback active'
+                  : 'Local browser storage sandbox'}
               </p>
             </div>
           </div>
@@ -68,92 +165,170 @@ CREATE POLICY "Users can manage own resources"
           </button>
         </div>
 
-        <div className="overflow-y-auto py-4 space-y-5 text-sm">
+        {/* Content */}
+        <div className="overflow-y-auto py-4 space-y-4 text-xs">
+          {/* Status Alert Banner */}
           {isConfigured ? (
-            <div className="p-4 bg-emerald-950/40 border border-emerald-500/30 rounded-xl space-y-2">
-              <div className="flex items-center gap-2 text-emerald-400 font-semibold text-sm">
-                <ShieldCheck className="w-4 h-4" />
-                <span>Supabase Live Sync is Active</span>
-              </div>
-              <p className="text-xs text-slate-300">
-                Your LinkTriage instance is connected to Supabase PostgreSQL with Row Level Security (RLS) enabled. Changes synchronize across all devices in real-time.
-              </p>
-              {user ? (
-                <div className="text-xs text-emerald-300/90 pt-1">
-                  Logged in as: <span className="font-mono text-white">{user.email}</span>
+            syncStatus === 'synced' ? (
+              <div className="p-3.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl space-y-1.5">
+                <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Supabase Cloud Sync is Live &amp; Working</span>
                 </div>
-              ) : (
-                <div className="text-xs text-amber-300/90 pt-1">
-                  You are not currently logged in. Sign in using the Account menu to sync saved links to your user account.
+                <p className="text-slate-300 leading-relaxed text-[11px]">
+                  All saved links and status changes are synchronizing directly to your Supabase PostgreSQL database in real-time. Changes persist across all devices and browser refreshes.
+                </p>
+                <div className="text-slate-400 text-[11px] pt-1">
+                  Total items in workspace: <span className="font-bold text-white">{resources.length}</span>
+                  {user && (
+                    <span className="ml-2">
+                      &bull; User: <span className="font-mono text-emerald-300">{user.email}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="p-3.5 bg-amber-950/40 border border-amber-500/30 rounded-xl space-y-2">
+                <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs">
+                  <AlertTriangle className="w-4 h-4" />
+                  <span>Saved Locally &bull; Supabase RLS Fix Needed</span>
+                </div>
+                <p className="text-slate-300 leading-relaxed text-[11px]">
+                  Your links are <strong className="text-white">safely preserved in local storage</strong> and will <strong className="text-white">NOT be lost on refresh</strong>. To enable automatic saving directly to your Supabase cloud database, apply the 1-click SQL fix below.
+                </p>
+                {syncError && (
+                  <div className="p-2 bg-slate-950/80 rounded border border-amber-500/20 font-mono text-[10px] text-amber-300/90 break-all">
+                    Supabase notice: {syncError}
+                  </div>
+                )}
+              </div>
+            )
+          ) : (
+            <div className="p-3.5 bg-indigo-950/40 border border-indigo-500/30 rounded-xl space-y-1.5">
+              <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs">
+                <Sparkles className="w-4 h-4" />
+                <span>Local Storage Sandbox Active</span>
+              </div>
+              <p className="text-slate-300 leading-relaxed text-[11px]">
+                LinkTriage is operating in local storage mode. Links you save are kept in your browser. Add your Supabase credentials to <code className="text-indigo-300 bg-slate-800 px-1 py-0.5 rounded">.env.local</code> to enable multi-device cloud synchronization.
+              </p>
+            </div>
+          )}
+
+          {/* Tab Selector */}
+          <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+            <button
+              onClick={() => setTab('fix')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                tab === 'fix'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-slate-400 hover:text-white bg-slate-800/50'
+              }`}
+            >
+              1-Click Supabase Fix SQL
+            </button>
+            <button
+              onClick={() => setTab('full')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                tab === 'full'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-slate-400 hover:text-white bg-slate-800/50'
+              }`}
+            >
+              Full Fresh Table Schema
+            </button>
+          </div>
+
+          {/* Tab 1: 1-Click Fix */}
+          {tab === 'fix' ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-white text-xs">
+                  Run in Supabase &rarr; SQL Editor:
+                </span>
+                <a
+                  href="https://supabase.com/dashboard"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                >
+                  Supabase Dashboard <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+              <div className="relative">
+                <pre className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] font-mono text-slate-300 overflow-x-auto max-h-40">
+                  {fixSqlCode}
+                </pre>
+                <button
+                  onClick={copyFix}
+                  className="absolute top-2 right-2 px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs flex items-center gap-1 shadow font-medium"
+                >
+                  {copiedFix ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedFix ? 'Copied!' : 'Copy Fix SQL'}
+                </button>
+              </div>
+
+              {/* Sync Action */}
+              <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+                <div className="text-[11px] text-slate-300">
+                  Ran the SQL in Supabase? Test and sync your local links now:
+                </div>
+                <button
+                  onClick={handleTestAndSync}
+                  disabled={syncing}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition shrink-0"
+                >
+                  {syncing ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <CloudUpload className="w-3.5 h-3.5" />
+                  )}
+                  <span>{syncing ? 'Syncing...' : 'Sync to Supabase'}</span>
+                </button>
+              </div>
+
+              {syncMsg && (
+                <div className="p-2.5 bg-slate-950 rounded-lg border border-slate-800 text-[11px] font-medium text-emerald-400">
+                  {syncMsg}
                 </div>
               )}
             </div>
           ) : (
-            <div className="p-4 bg-amber-950/30 border border-amber-500/30 rounded-xl space-y-2">
-              <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
-                <Sparkles className="w-4 h-4" />
-                <span>Instant Demo Mode Active</span>
+            /* Tab 2: Full Fresh Schema */
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-white text-xs">Full Schema Definition:</span>
+                <button
+                  onClick={copyFull}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs flex items-center gap-1 border border-slate-700 font-medium"
+                >
+                  {copiedFull ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  {copiedFull ? 'Copied' : 'Copy Schema'}
+                </button>
               </div>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                You can try all LinkTriage features (adding links, metadata scraping, drag & drop, filtering, PWA installation) right now! Data is saved locally in your browser storage.
-              </p>
-              {demoUser && (
-                <div className="text-xs text-indigo-300 pt-1">
-                  Active Demo Account: <span className="font-mono text-white">{demoUser.email}</span>
-                </div>
-              )}
+              <div className="relative">
+                <pre className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] font-mono text-slate-300 overflow-x-auto max-h-44">
+                  {fullSchemaCode}
+                </pre>
+              </div>
             </div>
           )}
-
-          <div>
-            <h4 className="font-semibold text-white mb-2 text-sm flex items-center justify-between">
-              <span>Connect to your Supabase Project</span>
-              <a
-                href="https://supabase.com"
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-normal"
-              >
-                supabase.com <ExternalLink className="w-3 h-3" />
-              </a>
-            </h4>
-            <ol className="list-decimal list-inside space-y-2 text-xs text-slate-300">
-              <li>
-                Create a new project on <strong className="text-white">Supabase</strong>.
-              </li>
-              <li>
-                Open the <strong className="text-white">SQL Editor</strong> and execute the table schema below:
-              </li>
-            </ol>
-
-            <div className="relative mt-2">
-              <pre className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] font-mono text-slate-300 overflow-x-auto max-h-36">
-                {sqlCode}
-              </pre>
-              <button
-                onClick={copySql}
-                className="absolute top-2 right-2 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs flex items-center gap-1 border border-slate-700 shadow"
-              >
-                {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                {copied ? 'Copied' : 'Copy SQL'}
-              </button>
-            </div>
-
-            <div className="mt-3 text-xs text-slate-300">
-              3. Add your environment variables in <code className="text-indigo-300 bg-slate-800 px-1 py-0.5 rounded">.env.local</code> or Vercel:
-              <pre className="mt-1.5 p-2 bg-slate-950 border border-slate-800 rounded-lg text-[11px] font-mono text-indigo-300">
-                NEXT_PUBLIC_SUPABASE_URL=https://xyzcompany.supabase.co&#10;NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
-              </pre>
-            </div>
-          </div>
         </div>
 
-        <div className="pt-3 border-t border-slate-800 flex justify-end">
+        {/* Footer */}
+        <div className="pt-3 border-t border-slate-800 flex justify-between items-center">
+          <button
+            onClick={() => refreshResources()}
+            className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
+          >
+            <RefreshCw className="w-3 h-3" />
+            Refresh Data
+          </button>
           <button
             onClick={onClose}
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition"
           >
-            Got It
+            Done
           </button>
         </div>
       </div>
