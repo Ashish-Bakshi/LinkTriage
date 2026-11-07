@@ -13,13 +13,11 @@ export function AuthModal({ isOpen, onClose }: Props) {
   const {
     user,
     demoUser,
-    isConfigured,
     signInWithEmail,
     signUpWithEmail,
     signInWithGoogle,
     signOut,
     loginAsDemoUser,
-    logoutDemoUser,
   } = useAuth();
 
   const [tab, setTab] = useState<'signin' | 'signup'>('signin');

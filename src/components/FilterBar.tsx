@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Search, X, SlidersHorizontal, RotateCcw } from 'lucide-react';
+import { Search, X, RotateCcw } from 'lucide-react';
 import { Platform, Priority } from '@/types';
 import { useResources } from '@/context/ResourcesContext';
 import { getPlatformInfo } from '@/lib/ui-helpers';

@@ -3,8 +3,8 @@
 import React from 'react';
 import { Resource, Status } from '@/types';
 import { useResources } from '@/context/ResourcesContext';
-import { getPlatformInfo, getPriorityInfo, getStatusInfo, formatRelativeTime } from '@/lib/ui-helpers';
-import { ExternalLink, Edit2, Trash2, ArrowUpDown } from 'lucide-react';
+import { getPlatformInfo, getPriorityInfo, formatRelativeTime } from '@/lib/ui-helpers';
+import { ExternalLink, Edit2, Trash2 } from 'lucide-react';
 
 interface Props {
   onEdit: (resource: Resource) => void;
@@ -51,7 +51,6 @@ export function TableView({ onEdit }: Props) {
           {filteredResources.map((res) => {
             const platformInfo = getPlatformInfo(res.source_platform);
             const priorityInfo = getPriorityInfo(res.priority);
-            const statusInfo = getStatusInfo(res.status);
 
             return (
               <tr

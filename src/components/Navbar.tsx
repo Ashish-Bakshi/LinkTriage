@@ -5,15 +5,12 @@ import {
   Kanban,
   Table,
   Plus,
-  Database,
   User,
   ShieldCheck,
   Sparkles,
-  Smartphone,
 } from 'lucide-react';
 import { useResources } from '@/context/ResourcesContext';
 import { useAuth } from '@/context/AuthContext';
-import Image from 'next/image';
 
 interface Props {
   onOpenQuickAdd: () => void;
@@ -31,7 +28,6 @@ export function Navbar({ onOpenQuickAdd, onOpenAuth, onOpenSetup }: Props) {
         {/* Logo and Brand */}
         <div className="flex items-center gap-3">
           <div className="relative w-9 h-9 rounded-xl overflow-hidden shadow-md shadow-indigo-600/30 shrink-0">
-            {/* Fallback styled logo or image */}
             <div className="w-full h-full bg-gradient-to-br from-indigo-600 via-indigo-700 to-cyan-500 flex items-center justify-center text-white font-black text-base">
               LT
             </div>

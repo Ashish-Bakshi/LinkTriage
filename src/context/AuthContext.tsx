@@ -24,28 +24,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [demoUser, setDemoUser] = useState<{ email: string; name: string } | null>(null);
-  const configured = isSupabaseConfigured();
-
-  useEffect(() => {
-    // Check if demo user saved in localStorage
-    const savedDemo = localStorage.getItem('linktriage_demo_user');
-    if (savedDemo) {
+  const [demoUser, setDemoUser] = useState<{ email: string; name: string } | null>(() => {
+    if (typeof window !== 'undefined') {
       try {
-        setDemoUser(JSON.parse(savedDemo));
+        const savedDemo = localStorage.getItem('linktriage_demo_user');
+        if (savedDemo) return JSON.parse(savedDemo);
       } catch {
         // ignore
       }
     }
+    return null;
+  });
 
+  const configured = isSupabaseConfigured();
+
+  useEffect(() => {
     if (!configured) {
-      setIsLoading(false);
       return;
     }
 
     const supabase = createClient();
     if (!supabase) {
-      setIsLoading(false);
       return;
     }
 
@@ -134,6 +133,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {};
   };
 
+  const logoutDemoUser = () => {
+    setDemoUser(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('linktriage_demo_user');
+    }
+  };
+
   const signOut = async () => {
     logoutDemoUser();
     if (configured) {
@@ -149,12 +155,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginAsDemoUser = () => {
     const demo = { email: 'founder@linktriage.dev', name: 'Demo Founder' };
     setDemoUser(demo);
-    localStorage.setItem('linktriage_demo_user', JSON.stringify(demo));
-  };
-
-  const logoutDemoUser = () => {
-    setDemoUser(null);
-    localStorage.removeItem('linktriage_demo_user');
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('linktriage_demo_user', JSON.stringify(demo));
+    }
   };
 
   return (

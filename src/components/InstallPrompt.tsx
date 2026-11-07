@@ -10,37 +10,38 @@ interface BeforeInstallPromptEvent extends Event {
 
 export function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isIOS, setIsIOS] = useState(false);
-  const [isStandalone, setIsStandalone] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
   const [showIOSInstructions, setShowIOSInstructions] = useState(false);
 
+  const [isStandalone] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return (
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as unknown as { standalone?: boolean }).standalone === true
+      );
+    }
+    return false;
+  });
+
+  const [isIOS] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const ua = window.navigator.userAgent.toLowerCase();
+      const isIosDevice = /iphone|ipad|ipod/.test(ua);
+      const isSafari = /safari/.test(ua) && !/chrome|crios|fxios/.test(ua);
+      return isIosDevice && isSafari;
+    }
+    return false;
+  });
+
+  const [dismissed, setDismissed] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return Boolean(sessionStorage.getItem('linktriage_install_dismissed'));
+    }
+    return false;
+  });
+
   useEffect(() => {
-    // Check if running in standalone mode (already installed)
-    const isInStandaloneMode =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+    if (isStandalone || dismissed) return;
 
-    if (isInStandaloneMode) {
-      setIsStandalone(true);
-      return;
-    }
-
-    // Check if previously dismissed in this session
-    const isDismissed = sessionStorage.getItem('linktriage_install_dismissed');
-    if (isDismissed) {
-      setDismissed(true);
-    }
-
-    // Detect iOS Safari
-    const ua = window.navigator.userAgent.toLowerCase();
-    const isIosDevice = /iphone|ipad|ipod/.test(ua);
-    const isSafari = /safari/.test(ua) && !/chrome|crios|fxios/.test(ua);
-    if (isIosDevice && isSafari) {
-      setIsIOS(true);
-    }
-
-    // Handler for Android / Chrome / Edge
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
@@ -51,7 +52,7 @@ export function InstallPrompt() {
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     };
-  }, []);
+  }, [isStandalone, dismissed]);
 
   const handleInstallClick = async () => {
     if (!deferredPrompt) return;
@@ -69,7 +70,9 @@ export function InstallPrompt() {
 
   const handleDismiss = () => {
     setDismissed(true);
-    sessionStorage.setItem('linktriage_install_dismissed', 'true');
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('linktriage_install_dismissed', 'true');
+    }
   };
 
   if (isStandalone || dismissed) {
@@ -139,7 +142,7 @@ export function InstallPrompt() {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-4 h-4 rounded-full bg-indigo-500/30 text-indigo-400 flex items-center justify-center font-bold text-[10px]">2</span>
-                  <span>Scroll down & tap <strong className="text-white">Add to Home Screen <PlusSquare className="w-3.5 h-3.5 inline text-indigo-400" /></strong></span>
+                  <span>Scroll down &amp; tap <strong className="text-white">Add to Home Screen <PlusSquare className="w-3.5 h-3.5 inline text-indigo-400" /></strong></span>
                 </div>
               </div>
             ) : (

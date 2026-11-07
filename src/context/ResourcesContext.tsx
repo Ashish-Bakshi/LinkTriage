@@ -1,9 +1,9 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState, useMemo, ReactNode } from 'react';
-import { Resource, Platform, Priority, Status, ViewMode, FilterOptions } from '@/types';
+import { Resource, Status, ViewMode, FilterOptions } from '@/types';
 import { INITIAL_MOCK_RESOURCES, DEFAULT_CATEGORIES } from '@/lib/supabase/mock-data';
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
+import { createClient } from '@/lib/supabase/client';
 import { useAuth } from './AuthContext';
 
 interface ResourcesContextType {
@@ -29,12 +29,46 @@ const ResourcesContext = createContext<ResourcesContextType | undefined>(undefin
 const LOCAL_STORAGE_KEY = 'linktriage_saved_resources';
 const CATEGORIES_KEY = 'linktriage_categories';
 
+function getInitialCategories(): string[] {
+  if (typeof window !== 'undefined') {
+    try {
+      const savedCats = localStorage.getItem(CATEGORIES_KEY);
+      if (savedCats) {
+        const parsed = JSON.parse(savedCats);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return Array.from(new Set([...DEFAULT_CATEGORIES, ...parsed]));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return DEFAULT_CATEGORIES;
+}
+
+function getInitialResources(): Resource[] {
+  if (typeof window !== 'undefined') {
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return INITIAL_MOCK_RESOURCES;
+}
+
 export function ResourcesProvider({ children }: { children: ReactNode }) {
   const { user, isConfigured } = useAuth();
-  const [resources, setResources] = useState<Resource[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [resources, setResources] = useState<Resource[]>(getInitialResources);
+  const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('kanban');
-  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [categories, setCategories] = useState<string[]>(getInitialCategories);
 
   const [filters, setFilters] = useState<FilterOptions>({
     search: '',
@@ -43,27 +77,9 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
     priority: 'All',
   });
 
-  // Load custom categories from localStorage
-  useEffect(() => {
-    try {
-      const savedCats = localStorage.getItem(CATEGORIES_KEY);
-      if (savedCats) {
-        const parsed = JSON.parse(savedCats);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const merged = Array.from(new Set([...DEFAULT_CATEGORIES, ...parsed]));
-          setCategories(merged);
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  // Fetch or initialize resources
   const fetchResources = async () => {
-    setIsLoading(true);
-
     if (isConfigured && user) {
+      setIsLoading(true);
       const supabase = createClient();
       if (supabase) {
         try {
@@ -74,43 +90,35 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
 
           if (!error && data) {
             setResources(data as Resource[]);
-            setIsLoading(false);
-            return;
           }
         } catch (err) {
           console.error('Supabase query error, falling back to local cache:', err);
         }
       }
+      setIsLoading(false);
     }
-
-    // Local / Demo Mode fallback
-    try {
-      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setResources(parsed);
-          setIsLoading(false);
-          return;
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    // Default seed
-    setResources(INITIAL_MOCK_RESOURCES);
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(INITIAL_MOCK_RESOURCES));
-    } catch {
-      // ignore
-    }
-    setIsLoading(false);
   };
 
   useEffect(() => {
-    fetchResources();
-  }, [user, isConfigured]);
+    let isSubscribed = true;
+    if (isConfigured && user) {
+      const supabase = createClient();
+      if (supabase) {
+        supabase
+          .from('resources')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .then(({ data, error }) => {
+            if (isSubscribed && !error && data) {
+              setResources(data as Resource[]);
+            }
+          });
+      }
+    }
+    return () => {
+      isSubscribed = false;
+    };
+  }, [isConfigured, user]);
 
   // Real-time synchronization with Supabase
   useEffect(() => {
@@ -151,10 +159,12 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
 
   // Persist to localStorage whenever resources change in demo/local mode
   const persistLocally = (newList: Resource[]) => {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newList));
-    } catch {
-      // ignore
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newList));
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -163,10 +173,12 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
     if (!trimmed || categories.includes(trimmed)) return;
     const updated = [...categories, trimmed];
     setCategories(updated);
-    try {
-      localStorage.setItem(CATEGORIES_KEY, JSON.stringify(updated));
-    } catch {
-      // ignore
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(CATEGORIES_KEY, JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -208,7 +220,6 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
             .single();
 
           if (!error && inserted) {
-            // Replace temporary item with DB item
             setResources((prev) => {
               const updated = prev.map((r) => (r.id === tempId ? (inserted as Resource) : r));
               persistLocally(updated);
@@ -256,7 +267,6 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteResource = async (id: string) => {
-    // Optimistic update
     setResources((prev) => {
       const next = prev.filter((r) => r.id !== id);
       persistLocally(next);
@@ -287,19 +297,15 @@ export function ResourcesProvider({ children }: { children: ReactNode }) {
   // Compute filtered resources
   const filteredResources = useMemo(() => {
     return resources.filter((res) => {
-      // Platform filter
       if (filters.platform !== 'All' && res.source_platform !== filters.platform) {
         return false;
       }
-      // Category filter
       if (filters.category !== 'All' && res.category !== filters.category) {
         return false;
       }
-      // Priority filter
       if (filters.priority !== 'All' && res.priority !== filters.priority) {
         return false;
       }
-      // Search term
       if (filters.search.trim()) {
         const query = filters.search.toLowerCase().trim();
         const inTitle = res.title?.toLowerCase().includes(query) ?? false;

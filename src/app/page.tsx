@@ -16,8 +16,6 @@ import {
   AlertCircle,
   CheckCircle2,
   Flag,
-  Sparkles,
-  Layers,
   Plus,
 } from 'lucide-react';
 
@@ -34,7 +32,8 @@ export default function HomePage() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('action') === 'quick-add') {
-        setIsQuickAddOpen(true);
+        window.history.replaceState({}, '', window.location.pathname);
+        setTimeout(() => setIsQuickAddOpen(true), 0);
       }
     }
   }, []);

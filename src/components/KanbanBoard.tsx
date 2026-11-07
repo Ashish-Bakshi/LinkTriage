@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { Resource, Status } from '@/types';
 import { useResources } from '@/context/ResourcesContext';
 import { ResourceCard } from './ResourceCard';
-import { Clock, AlertCircle, CheckCircle2, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { getStatusInfo } from '@/lib/ui-helpers';
 
 interface Props {
